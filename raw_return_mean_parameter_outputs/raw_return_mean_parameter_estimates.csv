@@ -1,0 +1,2 @@
+a,mu,phi,sigma_x,estimation_loglik,optimization_success,optimization_message,estimation_particles,estimation_observations,estimation_seed,train_end_date
+-3.0327730644014335e-05,-8.973831189446193,0.9874506667666402,0.09458062705803907,3688.5057010653213,True,Optimization terminated successfully.,500,1200,20260526,2015-12-31
