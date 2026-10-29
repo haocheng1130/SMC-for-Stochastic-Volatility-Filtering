@@ -1,2 +1,0 @@
-n_observations,n_training_observations,a_hat,mu_hat,phi_hat,sigma_x_hat,final_particles,final_loglik_estimate,mean_filtered_volatility,median_filtered_volatility,mean_relative_ess,min_relative_ess
-5358,4015,-3.0327730644014335e-05,-8.973831189446193,0.9874506667666402,0.09458062705803907,2500,17791.83986737908,0.00972714760332687,0.008621996229848602,0.9586058857899289,0.0014833001613755196

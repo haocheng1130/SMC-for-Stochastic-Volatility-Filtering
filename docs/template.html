@@ -1,0 +1,646 @@
+<title>SMC for Stochastic Volatility Filtering</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..100,500..800&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400..600&display=swap">
+<style>
+/* Layout: one reading column (~68ch) of explanation, interrupted by wide instrument panels (up to 1120px)
+   where the filter runs; charts sit on plain surfaces like a trading screen's chart pane. */
+:root {
+  --bg: #f4f6f9;
+  --surface: #ffffff;
+  --ink: #152033;
+  --muted: #586579;
+  --rule: #d5dce6;
+  --grid: #e7ecf2;
+  --accent: #1f5fa8;     /* guided proposal, filtered volatility */
+  --alarm: #c0392b;      /* bootstrap proposal, crash days */
+  --rv: #98a3b3;         /* realized volatility */
+  --amber: #c98a00;      /* comparison with the uncorrelated model */
+  --green: #2e8b57;      /* comparison with GJR-GARCH */
+  --shade: #eef1f6;      /* held-out period */
+  --display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --body: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e141e; --surface: #151d2a; --ink: #e5eaf1; --muted: #9aa6b7; --rule: #2a3546; --grid: #1e2836;
+    --accent: #6ea4ff; --alarm: #ff7b6b; --rv: #5d6a7c; --amber: #e8b04a; --green: #52c08a; --shade: #182231;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e141e; --surface: #151d2a; --ink: #e5eaf1; --muted: #9aa6b7; --rule: #2a3546; --grid: #1e2836;
+  --accent: #6ea4ff; --alarm: #ff7b6b; --rv: #5d6a7c; --amber: #e8b04a; --green: #52c08a; --shade: #182231;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg); color: var(--ink); font-family: var(--body); font-size: 17px; line-height: 1.6;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 0 64px;
+}
+.col { max-width: 68ch; margin-inline: auto; }
+.wide { max-width: 1120px; margin-inline: auto; }
+header.top { padding-block: 56px 28px; }
+.eyebrow { font-family: var(--mono); font-size: 12.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+h1, h2, h3 { font-family: var(--display); font-stretch: 85%; text-wrap: balance; line-height: 1.12; margin: 0; }
+h1 { font-size: clamp(34px, 5.4vw, 54px); font-weight: 800; letter-spacing: -0.01em; margin-top: 10px; }
+h2 { font-size: 28px; font-weight: 750; margin-top: 56px; margin-bottom: 12px; }
+h3 { font-size: 19px; font-weight: 700; }
+.dek { font-size: 21px; line-height: 1.45; color: var(--muted); margin-top: 14px; }
+p { margin: 0 0 14px; }
+a { color: var(--accent); }
+a:focus-visible, button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.findings { display: grid; gap: 14px; margin-top: 28px; padding: 0; list-style: none; }
+.findings li { display: grid; grid-template-columns: 7.5ch 1fr; gap: 14px; align-items: baseline; border-top: 1px solid var(--rule); padding-top: 12px; }
+.findings .num { font-family: var(--mono); font-size: 19px; font-weight: 500; font-variant-numeric: tabular-nums; color: var(--accent); }
+.findings .num.red { color: var(--alarm); }
+.eq { font-family: var(--mono); font-size: 15px; background: var(--surface); border: 1px solid var(--rule); border-radius: 4px; padding: 12px 16px; margin: 6px 0 16px; overflow-x: auto; white-space: nowrap; line-height: 1.9; }
+.models { display: grid; gap: 10px; margin: 8px 0 18px; padding: 0; list-style: none; }
+.models li { display: grid; grid-template-columns: 2.4em 1fr; gap: 8px; }
+.models b { font-family: var(--display); font-stretch: 85%; }
+var { font-style: italic; }
+
+/* instrument panel */
+.panel { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 18px 18px 14px; margin-top: 20px; }
+.controls { display: flex; flex-wrap: wrap; gap: 14px 22px; align-items: end; }
+.control { display: grid; gap: 4px; min-width: 0; }
+.control label, .legend, .readout, .note, th { font-family: var(--mono); font-size: 12.5px; }
+.control label { color: var(--muted); letter-spacing: 0.04em; text-transform: uppercase; }
+select, input[type="range"] { font: inherit; font-family: var(--mono); font-size: 14px; }
+select { padding: 5px 8px; border: 1px solid var(--rule); border-radius: 4px; background: var(--bg); color: var(--ink); }
+input[type="range"] { width: 190px; max-width: 100%; accent-color: var(--accent); }
+.val { font-family: var(--mono); font-size: 14px; font-variant-numeric: tabular-nums; }
+button { font-family: var(--display); font-stretch: 90%; font-weight: 700; font-size: 15px; border-radius: 4px; padding: 7px 14px; cursor: pointer; border: 1px solid var(--accent); }
+button.primary { background: var(--accent); color: var(--surface); }
+button.secondary { background: transparent; color: var(--accent); }
+button:disabled { opacity: 0.55; cursor: progress; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin: 18px 0 6px; }
+.stat { border-left: 3px solid var(--rule); padding-left: 10px; }
+.stat.b { border-color: var(--alarm); }
+.stat.g { border-color: var(--accent); }
+.stat .k { font-family: var(--mono); font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.stat .v { font-family: var(--mono); font-size: 17px; font-variant-numeric: tabular-nums; }
+.stat .sub { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.chart { width: 100%; display: block; touch-action: pan-y; }
+.chart-wrap { position: relative; margin-top: 10px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; color: var(--muted); margin-top: 6px; }
+.legend i { display: inline-block; width: 18px; height: 3px; vertical-align: middle; margin-right: 6px; border-radius: 2px; }
+.readout { color: var(--ink); min-height: 1.6em; margin-top: 6px; font-variant-numeric: tabular-nums; }
+.note { color: var(--muted); margin-top: 10px; line-height: 1.5; }
+.twin { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 18px; margin-top: 8px; }
+.twin > div { min-width: 0; }
+.twin h3 { font-size: 16px; }
+.twin h3 .ess { font-family: var(--mono); font-weight: 500; font-size: 14px; color: var(--muted); }
+.status { font-family: var(--mono); font-size: 13px; color: var(--muted); }
+.table-wrap { overflow-x: auto; margin-top: 14px; }
+table { border-collapse: collapse; width: 100%; min-width: 640px; }
+th, td { text-align: right; padding: 7px 10px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+th { color: var(--muted); font-weight: 500; text-transform: uppercase; letter-spacing: 0.03em; }
+td { font-family: var(--mono); font-size: 14px; font-variant-numeric: tabular-nums; }
+th:first-child, td:first-child { text-align: left; font-family: var(--body); font-size: 15px; }
+tr.best td { color: var(--accent); }
+footer { margin-top: 56px; border-top: 1px solid var(--rule); padding-top: 16px; font-size: 15px; color: var(--muted); }
+@media (max-width: 560px) {
+  body { font-size: 16px; }
+  .findings li { grid-template-columns: 1fr; gap: 2px; }
+  .panel { padding: 14px 12px 12px; }
+}
+</style>
+
+<header class="top col">
+  <div class="eyebrow">CAAM 31511 Monte Carlo Simulation · final project · S&amp;P 500, 2000–2021</div>
+  <h1>SMC for Stochastic Volatility Filtering</h1>
+  <p class="dek">Particle filters for daily S&amp;P 500 volatility, when the return and the volatility of the same day move together.</p>
+  <ul class="findings" id="findings"></ul>
+</header>
+
+<main>
+  <section class="col">
+    <h2>The model</h2>
+    <p>Each day <var>j</var> has a return <var>R<sub>j</sub></var>, observed, and a log-variance <var>X<sub>j</sub></var>, hidden. All three models share</p>
+    <div class="eq">R<sub>j</sub> = a + e<sup>X<sub>j</sub>/2</sup> η<sub>j</sub><br>X<sub>j+1</sub> = μ + φ (X<sub>j</sub> − μ) + σ<sub>X</sub> ξ<sub>j+1</sub>, &nbsp; η<sub>j</sub>, ξ<sub>j</sub> ~ N(0, 1)</div>
+    <p>and differ only in how the return shock η is correlated with the volatility shock ξ:</p>
+    <ul class="models">
+      <li><b>(i)</b><span><b>No correlation.</b> Volatility moves on its own.</span></li>
+      <li><b>(ii)</b><span><b>Next day,</b> corr(η<sub>j</sub>, ξ<sub>j+1</sub>) = ρ. A fall today raises tomorrow's volatility: the classical leverage effect.</span></li>
+      <li><b>(iii)</b><span><b>Same day,</b> corr(η<sub>j</sub>, ξ<sub>j</sub>) = ρ. The shock that lifts today's volatility also moves today's return, so the one-day forecast is skewed to the left.</span></li>
+    </ul>
+    <p>Parameters are estimated on 2000–2015 by maximizing a particle estimate of the likelihood. The 5-minute realized volatility √RV is never used by the filter; it only serves as a yardstick.</p>
+  </section>
+
+  <section class="wide">
+    <div class="col">
+      <h2>Run the particle filter</h2>
+      <p>The filter below runs in your browser over all 5358 days. In model (iii) the day's return says a lot about that day's volatility shock. The bootstrap filter ignores this and proposes ξ<sub>j</sub> from N(0, 1). The guided filter proposes from N(ρ z<sub>j</sub>, 1 − ρ²), with z<sub>j</sub> the return scaled by the predicted volatility, and corrects in the weights. Both are run on the same days; compare their effective sample size (ESS).</p>
+    </div>
+    <div class="panel" id="filter-panel">
+      <div class="controls">
+        <div class="control"><label for="model">Model</label>
+          <select id="model">
+            <option value="same">(iii) same-day correlation</option>
+            <option value="next">(ii) next-day correlation</option>
+            <option value="none">(i) no correlation</option>
+          </select></div>
+        <div class="control"><label for="particles">Particles N</label>
+          <select id="particles"><option>100</option><option>250</option><option>500</option><option selected>1000</option><option>2500</option><option>5000</option></select></div>
+        <div class="control"><label for="rho">ρ <span class="val" id="rho-val"></span></label>
+          <input id="rho" type="range" min="-0.95" max="0" step="0.01"></div>
+        <div class="control"><label for="window">Show</label>
+          <select id="window">
+            <option value="all">2000–2021</option>
+            <option value="gfc">2008–2009 crisis</option>
+            <option value="feb18">2018 volatility spike</option>
+            <option value="covid">2020 crash</option>
+            <option value="test">held-out 2016–2021</option>
+          </select></div>
+        <div class="control"><button class="primary" id="run">Run filter</button></div>
+        <div class="control"><button class="secondary" id="repeat">Repeat 10 times</button></div>
+      </div>
+      <div class="stats" id="stats"></div>
+      <div class="status" id="status" aria-live="polite"></div>
+      <div class="chart-wrap"><canvas class="chart" id="vol-chart" height="250" aria-label="Filtered volatility and realized volatility"></canvas></div>
+      <div class="legend"><span><i style="background: var(--rv)"></i>√RV, not used by the filter</span><span><i style="background: var(--accent)"></i>filtered volatility E[e<sup>X/2</sup> | r<sub>1:j</sub>]</span></div>
+      <div class="chart-wrap"><canvas class="chart" id="ess-chart" height="170" aria-label="Relative effective sample size"></canvas></div>
+      <div class="legend" id="ess-legend"></div>
+      <div class="readout" id="readout">Hover over the charts to read a day; click to inspect it below.</div>
+      <p class="note">ρ moves only the correlation; the other parameters stay at the model's estimate. The browser uses its own random numbers, so its log-likelihoods differ slightly from the notebook's.</p>
+    </div>
+
+    <div class="panel">
+      <h3 id="oneday-title">One step of the filter</h3>
+      <p class="note" style="margin-top:4px">Always model (iii), with N and, when model (iii) is selected, ρ from above. Both proposals start from the same particles for the previous day. Outline: proposed shocks ξ<sub>j</sub>. Filled: the same draws weighted by the observation, an approximation of ξ<sub>j</sub> given the return.</p>
+      <div class="twin">
+        <div><h3>Bootstrap proposal <span class="ess" id="ess-b"></span></h3><canvas class="chart" id="hist-b" height="170" aria-label="Bootstrap proposal histogram"></canvas></div>
+        <div><h3>Guided proposal <span class="ess" id="ess-g"></span></h3><canvas class="chart" id="hist-g" height="170" aria-label="Guided proposal histogram"></canvas></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="wide">
+    <div class="col">
+      <h2>Held-out forecasts, 2016–2021</h2>
+      <p>One-step forecasts on the 1343 days after the estimation period, from the notebook with N = 5000. Model (iii) gives the best forecast distributions and the best-calibrated tails. For the variance level alone (QLIKE) the uncorrelated model is slightly better.</p>
+    </div>
+    <div class="table-wrap"><table id="fc-table"></table></div>
+    <p class="note col">Gain: predictive log-likelihood of model (iii) minus that of the row, with the t statistic of the daily differences. u: probability integral transform of the day's return; nominal shares are 1%, 1% and 0.27%.</p>
+    <div class="panel">
+      <h3>Log-likelihood gain of model (iii), by year</h3>
+      <svg id="years" role="img" aria-label="Yearly log-likelihood gain of the same-day model" style="width:100%; display:block; margin-top:8px"></svg>
+      <div class="legend"><span><i style="background: var(--amber)"></i>vs (i) no correlation</span><span><i style="background: var(--green)"></i>vs GJR-GARCH(1,1)</span></div>
+    </div>
+  </section>
+
+  <footer class="col">
+    <p>Data: S&amp;P 500 open-to-close log returns and 5-minute realized variance, 2000-01-03 to 2021-05-18, derived from the Oxford-Man Realized Library. Code, notebook and report: <a href="https://github.com/haocheng1130/SMC-for-Stochastic-Volatility-Filtering">github.com/haocheng1130/SMC-for-Stochastic-Volatility-Filtering</a>.</p>
+  </footer>
+</main>
+
+<script>
+const DATA = __DATA__;
+
+const T = DATA.r.length;
+const R = Float64Array.from(DATA.r);
+const SQRT_RV = Float64Array.from(DATA.rv, v => Math.sqrt(v));
+const LOG2PI = Math.log(2 * Math.PI);
+const $ = id => document.getElementById(id);
+const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const fmt = (v, d) => (v < 0 ? "−" : "") + Math.abs(v).toFixed(d);
+const pct = (v, d = 2) => fmt(100 * v, d) + "%";
+
+// ---------- random numbers (mulberry32 + Box-Muller) ----------
+function makeRng(seed) {
+  let s = (seed * 2654435761) >>> 0 || 1, spare = null;
+  const uniform = () => {
+    s = (s + 0x6D2B79F5) | 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const normal = () => {
+    if (spare !== null) { const v = spare; spare = null; return v; }
+    let u = 0;
+    while (u === 0) u = uniform();
+    const rad = Math.sqrt(-2 * Math.log(u)), ang = 2 * Math.PI * uniform();
+    spare = rad * Math.sin(ang);
+    return rad * Math.cos(ang);
+  };
+  return { uniform, normal };
+}
+
+// ---------- the particle filter (same algorithm as sv_tools.py, without sorting) ----------
+function sameDayStep(xPrev, resid, theta, normals, guided, out) {
+  const [a, mu, phi, sx, rho] = theta, sRho = Math.sqrt(1 - rho * rho), logS = Math.log(sRho);
+  let max = -Infinity;
+  for (let n = 0; n < xPrev.length; n++) {
+    const mx = mu + phi * (xPrev[n] - mu), u = normals[n];
+    let xi = u, lr = 0;
+    if (guided) { xi = rho * resid * Math.exp(-0.5 * mx) + sRho * u; lr = 0.5 * (u * u - xi * xi) + logS; }
+    const x = mx + sx * xi, dev = resid - rho * Math.exp(0.5 * x) * xi, lv = 2 * logS + x;
+    const lw = -0.5 * (LOG2PI + lv + dev * dev * Math.exp(-lv)) + lr;
+    out.x[n] = x; out.xi[n] = xi; out.logw[n] = lw;
+    if (lw > max) max = lw;
+  }
+  return max;
+}
+
+async function runFilter(theta, timing, guided, N, seed, upto = T, onProgress = null) {
+  const [a, mu, phi, sx, rho] = theta, sRho = Math.sqrt(1 - rho * rho);
+  const rng = makeRng(seed);
+  let x = new Float64Array(N), xs = new Float64Array(N);
+  const st = { x: new Float64Array(N), xi: new Float64Array(N), logw: new Float64Array(N) };
+  const w = new Float64Array(N), normals = new Float64Array(N);
+  const sd0 = sx / Math.sqrt(1 - phi * phi);
+  for (let n = 0; n < N; n++) x[n] = mu + sd0 * rng.normal();
+  const ess = new Float32Array(upto), vol = new Float32Array(upto);
+  let loglik = 0;
+  for (let j = 0; j < upto; j++) {
+    const resid = R[j] - a;
+    let max;
+    if (timing === "same") {
+      for (let n = 0; n < N; n++) normals[n] = rng.normal();
+      max = sameDayStep(x, resid, theta, normals, guided, st);
+    } else {
+      max = -Infinity;
+      for (let n = 0; n < N; n++) {
+        const lw = -0.5 * (LOG2PI + x[n] + resid * resid * Math.exp(-x[n]));
+        st.x[n] = x[n]; st.logw[n] = lw;
+        if (lw > max) max = lw;
+      }
+    }
+    let sw = 0;
+    for (let n = 0; n < N; n++) { w[n] = Math.exp(st.logw[n] - max); sw += w[n]; }
+    loglik += max + Math.log(sw / N);
+    let s2 = 0, fv = 0;
+    for (let n = 0; n < N; n++) { const wn = w[n] / sw; w[n] = wn; s2 += wn * wn; fv += wn * Math.exp(0.5 * st.x[n]); }
+    ess[j] = 1 / s2 / N; vol[j] = fv;
+    // systematic resampling
+    const u0 = rng.uniform() / N;
+    let c = w[0], i = 0;
+    for (let n = 0; n < N; n++) {
+      const pos = u0 + n / N;
+      while (pos > c && i < N - 1) { i++; c += w[i]; }
+      xs[n] = st.x[i];
+    }
+    if (timing === "same") { const t = x; x = xs; xs = t; }
+    else {
+      for (let n = 0; n < N; n++) {
+        const eta = resid * Math.exp(-0.5 * xs[n]);
+        x[n] = mu + phi * (xs[n] - mu) + sx * (rho * eta + sRho * rng.normal());
+      }
+    }
+    if (onProgress && j % 400 === 399) { onProgress(j / upto); await new Promise(r => setTimeout(r, 0)); }
+  }
+  return { loglik, ess, vol, particles: x };
+}
+
+// ---------- state ----------
+const state = { runs: null, window: "all", hover: null, day: DATA.dates.indexOf(DATA.one_day_date), busy: false };
+const WINDOWS = {
+  all: ["2000-01-01", "2021-12-31"], gfc: ["2008-08-01", "2009-07-31"], feb18: ["2017-11-01", "2018-05-31"],
+  covid: ["2020-01-15", "2020-06-30"], test: ["2016-01-01", "2021-12-31"],
+};
+function windowRange() {
+  const [s, e] = WINDOWS[state.window];
+  let i0 = DATA.dates.findIndex(d => d >= s), i1 = DATA.dates.length - 1;
+  while (DATA.dates[i1] > e) i1--;
+  return [i0, i1];
+}
+function currentTheta() {
+  const th = DATA.theta[$("model").value].slice();
+  th[4] = $("model").value === "none" ? 0 : parseFloat($("rho").value);
+  return th;
+}
+function setRhoFromModel() {
+  const m = $("model").value, rho = DATA.theta[m][4];
+  $("rho").value = rho.toFixed(2);
+  $("rho").disabled = m === "none";
+  $("rho-val").textContent = m === "none" ? "0" : fmt(rho, 2);
+}
+
+// ---------- canvas helpers ----------
+function setupCanvas(cv) {
+  const dpr = window.devicePixelRatio || 1, w = cv.clientWidth, h = parseInt(cv.getAttribute("height"));
+  cv.style.height = h + "px";
+  cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+  const ctx = cv.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.font = `11.5px ${css("--mono")}`;
+  return { ctx, w, h };
+}
+const PAD = { l: 52, r: 12, t: 10, b: 24 };
+
+function drawTimeAxis(ctx, w, h, i0, i1, xOf) {
+  ctx.fillStyle = css("--muted"); ctx.textAlign = "center"; ctx.textBaseline = "top";
+  const y0 = parseInt(DATA.dates[i0].slice(0, 4)), y1 = parseInt(DATA.dates[i1].slice(0, 4));
+  const span = i1 - i0;
+  if (span > 400) {
+    const pxPerYear = (xOf(i1) - xOf(i0)) / Math.max(1, span / 252);
+    const step = Math.max(1, Math.ceil(44 / pxPerYear));
+    for (let y = y0 + ((step - (y0 % step)) % step); y <= y1; y += step) {
+      const idx = DATA.dates.findIndex(d => d >= `${y}-01-01`);
+      if (idx < i0 || idx > i1) continue;
+      ctx.fillText(String(y), xOf(idx), h - PAD.b + 6);
+    }
+  } else {
+    let last = "", lastX = -1e9;
+    for (let i = i0; i <= i1; i++) {
+      const ym = DATA.dates[i].slice(0, 7);
+      if (ym === last) continue;
+      last = ym;
+      if (xOf(i) - lastX > 56) {
+        lastX = xOf(i);
+        const mon = new Date(DATA.dates[i] + "T00:00:00Z").toLocaleString("en", { month: "short", timeZone: "UTC" });
+        ctx.fillText(mon + (ym.endsWith("-01") || i === i0 ? " " + ym.slice(0, 4) : ""), xOf(i), h - PAD.b + 6);
+      }
+    }
+  }
+}
+
+function drawVolChart() {
+  const { ctx, w, h } = setupCanvas($("vol-chart"));
+  const [i0, i1] = windowRange();
+  const runs = state.runs;
+  const series = runs ? runs.main.vol : null;
+  let ymax = 0;
+  for (let i = i0; i <= i1; i++) ymax = Math.max(ymax, SQRT_RV[i], series ? series[i] : 0);
+  ymax = Math.ceil(ymax * 100 * 1.05);
+  const xOf = i => PAD.l + (i - i0) / Math.max(1, i1 - i0) * (w - PAD.l - PAD.r);
+  const yOf = v => h - PAD.b - v * 100 / ymax * (h - PAD.t - PAD.b);
+  // held-out shading
+  const t0 = DATA.dates.findIndex(d => d >= "2016-01-01");
+  if (t0 <= i1) { ctx.fillStyle = css("--shade"); const xs = xOf(Math.max(t0, i0)); ctx.fillRect(xs, PAD.t, w - PAD.r - xs, h - PAD.t - PAD.b); }
+  // grid
+  ctx.strokeStyle = css("--grid"); ctx.lineWidth = 1; ctx.fillStyle = css("--muted"); ctx.textAlign = "right"; ctx.textBaseline = "middle";
+  const step = ymax > 6 ? 2 : 1;
+  for (let v = 0; v <= ymax; v += step) {
+    const y = yOf(v / 100); ctx.beginPath(); ctx.moveTo(PAD.l, y); ctx.lineTo(w - PAD.r, y); ctx.stroke();
+    ctx.fillText(v + "%", PAD.l - 6, y);
+  }
+  drawTimeAxis(ctx, w, h, i0, i1, xOf);
+  const line = (arr, color, lw) => {
+    ctx.strokeStyle = color; ctx.lineWidth = lw; ctx.beginPath();
+    for (let i = i0; i <= i1; i++) { const x = xOf(i), y = yOf(arr[i]); i === i0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); }
+    ctx.stroke();
+  };
+  line(SQRT_RV, css("--rv"), 0.8);
+  if (series) line(series, css("--accent"), 1.3);
+  drawMarkers(ctx, h, i0, i1, xOf);
+}
+
+function drawEssChart() {
+  const { ctx, w, h } = setupCanvas($("ess-chart"));
+  const [i0, i1] = windowRange();
+  const xOf = i => PAD.l + (i - i0) / Math.max(1, i1 - i0) * (w - PAD.l - PAD.r);
+  const lo = -4, yOf = v => PAD.t + (0 - Math.log10(Math.max(v, 1e-4))) / (0 - lo) * (h - PAD.t - PAD.b);
+  ctx.strokeStyle = css("--grid"); ctx.fillStyle = css("--muted"); ctx.textAlign = "right"; ctx.textBaseline = "middle";
+  for (const v of [1, 0.1, 0.01, 0.001, 0.0001]) {
+    const y = yOf(v); ctx.beginPath(); ctx.moveTo(PAD.l, y); ctx.lineTo(w - PAD.r, y); ctx.stroke();
+    ctx.fillText(String(v), PAD.l - 6, y);
+  }
+  drawTimeAxis(ctx, w, h, i0, i1, xOf);
+  if (state.runs) {
+    const draw = (arr, color) => {
+      ctx.strokeStyle = color; ctx.lineWidth = 0.9; ctx.beginPath();
+      for (let i = i0; i <= i1; i++) { const x = xOf(i), y = yOf(arr[i]); i === i0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); }
+      ctx.stroke();
+    };
+    if (state.runs.boot) draw(state.runs.boot.ess, css("--alarm"));
+    draw(state.runs.main.ess, state.runs.timing === "same" ? css("--accent") : css("--alarm"));
+  }
+  drawMarkers(ctx, h, i0, i1, xOf);
+}
+
+function drawMarkers(ctx, h, i0, i1, xOf) {
+  for (const [idx, color, dash] of [[state.day, css("--ink"), [3, 3]], [state.hover, css("--muted"), []]]) {
+    if (idx == null || idx < i0 || idx > i1) continue;
+    ctx.strokeStyle = color; ctx.lineWidth = 1; ctx.setLineDash(dash);
+    ctx.beginPath(); ctx.moveTo(xOf(idx), PAD.t); ctx.lineTo(xOf(idx), h - PAD.b); ctx.stroke(); ctx.setLineDash([]);
+  }
+}
+
+function drawHist(id, prop) {
+  const { ctx, w, h } = setupCanvas($(id));
+  const d = state.oneDay && state.oneDay[prop];
+  const lo = -4, hi = 7, nb = 66, bw = (hi - lo) / nb;
+  const pad = { l: 12, r: 12, t: 8, b: 24 };
+  const xOf = v => pad.l + (v - lo) / (hi - lo) * (w - pad.l - pad.r);
+  ctx.strokeStyle = css("--grid"); ctx.fillStyle = css("--muted"); ctx.textAlign = "center"; ctx.textBaseline = "top";
+  for (let v = -4; v <= 7; v += 2) { ctx.beginPath(); ctx.moveTo(xOf(v), pad.t); ctx.lineTo(xOf(v), h - pad.b); ctx.stroke(); ctx.fillText(String(v).replace("-", "−"), xOf(v), h - pad.b + 6); }
+  if (!d) return;
+  const prop_ = new Float64Array(nb), wt = new Float64Array(nb);
+  for (let n = 0; n < d.xi.length; n++) {
+    const b = Math.floor((d.xi[n] - lo) / bw);
+    if (b < 0 || b >= nb) continue;
+    prop_[b] += 1 / d.xi.length; wt[b] += d.w[n];
+  }
+  let ymax = 0;
+  for (let b = 0; b < nb; b++) ymax = Math.max(ymax, prop_[b], wt[b]);
+  const yOf = v => h - pad.b - v / ymax * (h - pad.t - pad.b) * 0.95;
+  ctx.fillStyle = prop === "boot" ? css("--alarm") : css("--accent");
+  ctx.globalAlpha = 0.6;
+  for (let b = 0; b < nb; b++) if (wt[b] > 0) ctx.fillRect(xOf(lo + b * bw), yOf(wt[b]), xOf(lo + bw) - xOf(lo) - 0.5, h - pad.b - yOf(wt[b]));
+  ctx.globalAlpha = 1;
+  ctx.strokeStyle = css("--ink"); ctx.lineWidth = 1; ctx.beginPath();
+  for (let b = 0; b < nb; b++) {
+    const x0 = xOf(lo + b * bw), x1 = xOf(lo + (b + 1) * bw), y = yOf(prop_[b]);
+    b === 0 ? ctx.moveTo(x0, y) : ctx.lineTo(x0, y); ctx.lineTo(x1, y);
+  }
+  ctx.stroke();
+}
+
+function redraw() { drawVolChart(); drawEssChart(); drawHist("hist-b", "boot"); drawHist("hist-g", "guided"); }
+
+// ---------- actions ----------
+function setBusy(b, msg = "") {
+  state.busy = b; $("run").disabled = b; $("repeat").disabled = b; $("status").textContent = msg;
+}
+function statBlock(cls, key, val, sub = "") {
+  return `<div class="stat ${cls}"><div class="k">${key}</div><div class="v">${val}</div>${sub ? `<div class="sub">${sub}</div>` : ""}</div>`;
+}
+function summarize(run) {
+  let mean = 0, low = 0;
+  for (let i = 0; i < T; i++) { mean += run.ess[i]; if (run.ess[i] < 0.1) low++; }
+  return { mean: mean / T, low: low / T };
+}
+
+async function runAll() {
+  if (state.busy) return;
+  const model = $("model").value, timing = model === "same" ? "same" : "next", theta = currentTheta(), N = parseInt($("particles").value);
+  setBusy(true, "Running the filter…");
+  const t0 = performance.now();
+  const runs = { timing };
+  if (timing === "same") {
+    runs.boot = await runFilter(theta, "same", false, N, 1, T, p => $("status").textContent = `Bootstrap filter ${Math.round(100 * p)}%`);
+    runs.main = await runFilter(theta, "same", true, N, 1, T, p => $("status").textContent = `Guided filter ${Math.round(100 * p)}%`);
+  } else {
+    runs.main = await runFilter(theta, "next", false, N, 1, T, p => $("status").textContent = `Bootstrap filter ${Math.round(100 * p)}%`);
+  }
+  state.runs = runs;
+  const secs = (performance.now() - t0) / 1000;
+  let html = "";
+  if (runs.boot) {
+    const b = summarize(runs.boot), g = summarize(runs.main);
+    html += statBlock("b", "bootstrap: log-likelihood", fmt(runs.boot.loglik, 1));
+    html += statBlock("g", "guided: log-likelihood", fmt(runs.main.loglik, 1));
+    html += statBlock("b", "bootstrap: mean ESS / N", fmt(b.mean, 3), `below 0.1 on ${pct(b.low, 1)} of days`);
+    html += statBlock("g", "guided: mean ESS / N", fmt(g.mean, 3), `below 0.1 on ${pct(g.low, 1)} of days`);
+  } else {
+    const b = summarize(runs.main);
+    html += statBlock("b", "bootstrap: log-likelihood", fmt(runs.main.loglik, 1));
+    html += statBlock("b", "bootstrap: mean ESS / N", fmt(b.mean, 3), `below 0.1 on ${pct(b.low, 1)} of days`);
+  }
+  $("stats").innerHTML = html;
+  $("ess-legend").innerHTML = runs.boot
+    ? `<span><i style="background: var(--alarm)"></i>relative ESS, bootstrap</span><span><i style="background: var(--accent)"></i>relative ESS, guided</span>`
+    : `<span><i style="background: var(--alarm)"></i>relative ESS, bootstrap (the only proposal needed in this model)</span>`;
+  $("status").dataset.last = `Ran ${runs.boot ? "two filters" : "one filter"} with N = ${N} over ${T} days in ${secs.toFixed(1)} s.`;
+  setBusy(false, $("status").dataset.last);
+  redraw();
+  await inspectDay(state.day);
+}
+
+async function repeatRuns() {
+  if (state.busy) return;
+  const model = $("model").value, timing = model === "same" ? "same" : "next", theta = currentTheta(), N = parseInt($("particles").value);
+  const props = timing === "same" ? [["bootstrap", false], ["guided", true]] : [["bootstrap", false]];
+  setBusy(true, "Repeating…");
+  const out = [];
+  for (const [name, guided] of props) {
+    const lls = [];
+    for (let s = 1; s <= 10; s++) {
+      $("status").textContent = `${name}: run ${s} of 10`;
+      lls.push((await runFilter(theta, timing, guided, N, 100 + s, T, () => {})).loglik);
+    }
+    const m = lls.reduce((a, b) => a + b) / lls.length;
+    const sd = Math.sqrt(lls.reduce((a, b) => a + (b - m) ** 2, 0) / (lls.length - 1));
+    out.push(`${name}: mean ${fmt(m, 1)}, sd ${fmt(sd, 2)}`);
+  }
+  setBusy(false, `Log-likelihood over 10 random number streams, N = ${N}. ${out.join(" · ")}.`);
+}
+
+async function inspectDay(idx) {
+  if (idx == null || idx < 1) return;
+  state.day = idx;
+  setBusy(true, `Computing one step for ${DATA.dates[idx]}…`);
+  const th = DATA.theta.same.slice();
+  if ($("model").value === "same") th[4] = parseFloat($("rho").value);
+  const N = parseInt($("particles").value);
+  const prev = await runFilter(th, "same", true, N, 7, idx);
+  const rng = makeRng(99), normals = new Float64Array(N);
+  for (let n = 0; n < N; n++) normals[n] = rng.normal();
+  state.oneDay = {};
+  for (const [key, guided] of [["boot", false], ["guided", true]]) {
+    const st = { x: new Float64Array(N), xi: new Float64Array(N), logw: new Float64Array(N) };
+    const max = sameDayStep(prev.particles, R[idx] - th[0], th, normals, guided, st);
+    const w = new Float64Array(N);
+    let sw = 0, s2 = 0;
+    for (let n = 0; n < N; n++) { w[n] = Math.exp(st.logw[n] - max); sw += w[n]; }
+    for (let n = 0; n < N; n++) { w[n] /= sw; s2 += w[n] * w[n]; }
+    state.oneDay[key] = { xi: st.xi, w, ess: 1 / s2 / N };
+  }
+  $("oneday-title").textContent = `One step of the filter on ${DATA.dates[idx]}: return ${pct(R[idx])}, √RV ${pct(SQRT_RV[idx])}`;
+  $("ess-b").textContent = `relative ESS ${state.oneDay.boot.ess.toFixed(3)}`;
+  $("ess-g").textContent = `relative ESS ${state.oneDay.guided.ess.toFixed(3)}`;
+  setBusy(false, $("status").dataset.last || "");
+  redraw();
+}
+
+// ---------- hover and click ----------
+function indexAt(cv, evt) {
+  const rect = cv.getBoundingClientRect(), [i0, i1] = windowRange();
+  const x = (evt.clientX - rect.left - PAD.l) / (rect.width - PAD.l - PAD.r);
+  if (x < 0 || x > 1) return null;
+  return Math.round(i0 + x * (i1 - i0));
+}
+for (const id of ["vol-chart", "ess-chart"]) {
+  const cv = $(id);
+  cv.addEventListener("mousemove", e => {
+    const i = indexAt(cv, e); state.hover = i;
+    if (i != null) {
+      let s = `${DATA.dates[i]} · return ${pct(R[i])} · √RV ${pct(SQRT_RV[i])}`;
+      if (state.runs) {
+        s += ` · filtered ${pct(state.runs.main.vol[i])}`;
+        if (state.runs.boot) s += ` · ESS bootstrap ${state.runs.boot.ess[i].toFixed(3)}, guided ${state.runs.main.ess[i].toFixed(3)}`;
+        else s += ` · ESS ${state.runs.main.ess[i].toFixed(3)}`;
+      }
+      $("readout").textContent = s;
+    }
+    drawVolChart(); drawEssChart();
+  });
+  cv.addEventListener("mouseleave", () => { state.hover = null; drawVolChart(); drawEssChart(); });
+  cv.addEventListener("click", e => { const i = indexAt(cv, e); if (i != null && !state.busy) inspectDay(i); });
+}
+
+// ---------- static sections ----------
+function buildFindings() {
+  const c = DATA.comparisons, e = DATA.ess;
+  const items = [
+    [fmt(c["SV, no correlation"].test_loglik_diff, 1), "", `held-out log-likelihood gain of the same-day model over the uncorrelated one (t = ${c["SV, no correlation"].test_loglik_t.toFixed(1)}), and ${fmt(c["GJR-GARCH(1,1)"].test_loglik_diff, 0)} over GJR-GARCH.`],
+    [fmt(e["same, bootstrap filter"].mean, 2), "red", `mean ESS / N of the bootstrap filter in the same-day model, against ${fmt(e.same.mean, 2)} with the guided proposal at the same cost per particle.`],
+    [fmt(DATA.theta.same[4], 2), "", `estimated same-day correlation ρ. The noisier bootstrap likelihood pulls the estimate to ${fmt(DATA.rho_bootstrap, 2)}.`],
+  ];
+  $("findings").innerHTML = items.map(([n, cls, t]) => `<li><span class="num ${cls}">${n}</span><span>${t}</span></li>`).join("");
+}
+
+function buildTable() {
+  const f = DATA.forecasts, c = DATA.comparisons;
+  const rows = [["SV, no correlation", "(i) no correlation"], ["SV, next-day correlation", "(ii) next-day"],
+                ["SV, same-day correlation", "(iii) same-day"], ["GARCH(1,1)", "GARCH(1,1)"], ["GJR-GARCH(1,1)", "GJR-GARCH(1,1)"]];
+  let html = "<thead><tr><th>model</th><th>log-lik.</th><th>gain of (iii)</th><th>u &lt; 1%</th><th>u &gt; 99%</th><th>beyond 3 sd</th><th>QLIKE</th></tr></thead><tbody>";
+  for (const [key, label] of rows) {
+    const r = f[key], g = c[key];
+    html += `<tr class="${key.includes("same-day") ? "best" : ""}"><td>${label}</td><td>${r.loglik.toFixed(1)}</td>` +
+      `<td>${g ? `${g.test_loglik_diff.toFixed(1)} (t = ${g.test_loglik_t.toFixed(1)})` : "—"}</td>` +
+      `<td>${pct(r.pit_below_1pct)}</td><td>${pct(r.pit_above_99pct)}</td><td>${pct(r.beyond_3sd)}</td><td>${r.qlike.toFixed(3)}</td></tr>`;
+  }
+  $("fc-table").innerHTML = html + "</tbody>";
+}
+
+function buildYears() {
+  const svg = $("years"), W = svg.clientWidth || 700, H = 220, pad = { l: 46, r: 10, t: 12, b: 26 };
+  const A = DATA.by_year["same - none"], B = DATA.by_year["same - GJR"];
+  const years = Object.keys(A).map(Number).sort((a, b) => a - b);
+  const vals = years.flatMap(y => [A[y], B[y]]);
+  const lo = Math.min(0, Math.floor(Math.min(...vals) / 10) * 10), hi = Math.ceil(Math.max(...vals) / 10) * 10;
+  const bw = (W - pad.l - pad.r) / years.length;
+  const yOf = v => pad.t + (hi - v) / (hi - lo) * (H - pad.t - pad.b);
+  let s = `<rect x="${pad.l + years.indexOf(2016) * bw}" y="${pad.t}" width="${(years.length - years.indexOf(2016)) * bw}" height="${H - pad.t - pad.b}" style="fill: var(--shade)"/>`;
+  for (let v = lo; v <= hi; v += 10) {
+    s += `<line x1="${pad.l}" x2="${W - pad.r}" y1="${yOf(v)}" y2="${yOf(v)}" style="stroke: var(--grid)"/>` +
+         `<text x="${pad.l - 6}" y="${yOf(v)}" text-anchor="end" dominant-baseline="middle" style="fill: var(--muted); font-family: var(--mono); font-size: 11px">${v}</text>`;
+  }
+  years.forEach((y, k) => {
+    const x = pad.l + k * bw;
+    for (const [v, color, off] of [[A[y], "var(--amber)", 0.12], [B[y], "var(--green)", 0.5]]) {
+      const y0 = yOf(Math.max(v, 0)), hh = Math.abs(yOf(v) - yOf(0));
+      s += `<rect x="${x + off * bw}" y="${y0}" width="${0.38 * bw}" height="${hh}" style="fill: ${color}"><title>${y}: ${v.toFixed(1)}</title></rect>`;
+    }
+    if (y % 2 === 0) s += `<text x="${x + bw / 2}" y="${H - 8}" text-anchor="middle" style="fill: var(--muted); font-family: var(--mono); font-size: 11px">${y}</text>`;
+  });
+  s += `<line x1="${pad.l}" x2="${W - pad.r}" y1="${yOf(0)}" y2="${yOf(0)}" style="stroke: var(--ink); stroke-width: 0.8"/>`;
+  s += `<text x="${pad.l + years.indexOf(2016) * bw + 6}" y="${pad.t + 12}" style="fill: var(--muted); font-family: var(--mono); font-size: 11px">held out</text>`;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("height", H);
+  svg.innerHTML = s;
+}
+
+// ---------- wiring ----------
+$("model").addEventListener("change", () => { setRhoFromModel(); runAll(); });
+$("particles").addEventListener("change", runAll);
+$("rho").addEventListener("input", () => { $("rho-val").textContent = fmt(parseFloat($("rho").value), 2); });
+$("rho").addEventListener("change", runAll);
+$("window").addEventListener("change", () => { state.window = $("window").value; redraw(); });
+$("run").addEventListener("click", runAll);
+$("repeat").addEventListener("click", repeatRuns);
+let resizeTimer = null;
+window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { redraw(); buildYears(); }, 120); });
+const themeRedraw = () => { redraw(); };
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", themeRedraw);
+new MutationObserver(themeRedraw).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+
+buildFindings(); buildTable(); buildYears(); setRhoFromModel(); redraw();
+runAll();
+</script>
